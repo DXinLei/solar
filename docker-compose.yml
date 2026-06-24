@@ -1,0 +1,25 @@
+# ============================================================
+# 倪派紫微斗数真太阳时 API — Docker Compose 编排
+# 使用方式：
+#   1. 在项目目录放置 config.json（含飞书凭证）
+#   2. docker compose up -d
+#   3. docker compose logs -f  查看日志
+# ============================================================
+services:
+  solar:
+    build: .
+    container_name: solar-time
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      # config.json 挂载出来，飞书 SET 修改持久化
+      - ./config.json:/solar/config.json
+    environment:
+      - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/solar-time?bj_time=2000-01-01+12:00:00')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

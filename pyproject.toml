@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "solar"
 version = "0.1.0"
-description = "Add your description here"
+description = "倪派紫微斗数真太阳时 API"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -13,3 +17,6 @@ dependencies = [
     "pydantic>=2.13.4",
     "uvicorn>=0.49.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
