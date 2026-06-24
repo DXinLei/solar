@@ -64,6 +64,16 @@ async def solar_time(
 
     返回真太阳时、十二时辰、子时类型（晚子时/早子时）、排盘用最终日期。
     """
+    # 校验：地理参数必须全部同时传入，或全部使用配置文件默认值
+    geo_params = {"province": province, "city": city, "district": district}
+    provided_count = sum(1 for v in geo_params.values() if v is not None)
+    if provided_count not in (0, 3):
+        missing = [k for k, v in geo_params.items() if v is None]
+        raise HTTPException(
+            status_code=400,
+            detail=f"地理参数必须全部同时传入或全部省略使用默认值，当前缺少参数: {', '.join(missing)}",
+        )
+
     # 省/市/区参数未传时使用配置文件默认值
     actual_province = province if province else default_location["province"]
     actual_city = city if city else default_location["city"]

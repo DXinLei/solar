@@ -30,9 +30,9 @@ uv run uvicorn app.main:app --reload
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| province | string | config.json | 省份名称，不传使用配置文件默认值，支持模糊匹配 |
-| city | string | config.json | 城市名称，不传使用配置文件默认值，支持模糊匹配 |
-| district | string | config.json | 区县名称，不传使用配置文件默认值，支持模糊匹配 |
+| province | string | config.json | 省份名称，不传使用配置文件默认值，支持模糊匹配。省/市/区必须**全部传入**或**全部省略** |
+| city | string | config.json | 城市名称，不传使用配置文件默认值，支持模糊匹配。省/市/区必须**全部传入**或**全部省略** |
+| district | string | config.json | 区县名称，不传使用配置文件默认值，支持模糊匹配。省/市/区必须**全部传入**或**全部省略** |
 | bj_time | string | 当前时间 | 北京时间 YYYY-MM-DD HH:MM:SS，不传则使用当前时间 |
 
 **示例请求：**
@@ -44,10 +44,10 @@ curl "http://127.0.0.1:8000/api/solar-time"
 # 指定时间，地区使用默认值
 curl "http://127.0.0.1:8000/api/solar-time?bj_time=1994-12-16+22:30:00"
 
-# 只改省份，市/区沿用默认值
-curl "http://127.0.0.1:8000/api/solar-time?province=广东省"
+# ❌ 错误：只改省份（缺少 city/district 会报 400）
+# curl "http://127.0.0.1:8000/api/solar-time?province=广东省"
 
-# 完整指定省市区和时间
+# ✅ 完整指定省市区和时间（必须全部传入）
 curl "http://127.0.0.1:8000/api/solar-time?province=广东省&city=深圳市&district=南山区&bj_time=2026-06-24+12:00:00"
 ```
 
