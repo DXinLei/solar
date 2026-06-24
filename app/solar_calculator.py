@@ -124,6 +124,12 @@ def _hours_to_hms(hours: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+def _hms_to_float(hms: str) -> float:
+    """将 HH:MM:SS 转换为小时数（浮点）"""
+    parts = hms.split(":")
+    return int(parts[0]) + int(parts[1]) / 60 + int(parts[2]) / 3600
+
+
 def _get_shichen(solar_hours: float) -> tuple[str, Optional[str], str]:
     """根据真太阳时确定十二时辰、子时类型和排盘日期偏移。
 
@@ -154,6 +160,78 @@ def _get_shichen(solar_hours: float) -> tuple[str, Optional[str], str]:
 
 class SolarCalculator:
     """真太阳时计算器"""
+
+    def reverse_calculate(
+        self,
+        lng: float,
+        lat: float,
+        target_solar_hms: str,
+        anchor_bj_dt: Optional[datetime] = None,
+    ) -> datetime:
+        """逆向推算：给定目标真太阳时，反算出对应的北京时间。
+
+        原理：真太阳时 = 北京时间 + (经度-120)/15 + 均时差
+        - 先扣经度修正（固定值）做粗定位
+        - 再逐次逼近均时差（变化值），error 双向自动补偿
+
+        Args:
+            lng: 当地经度
+            lat: 当地纬度
+            target_solar_hms: 目标真太阳时 "HH:MM:SS"
+            anchor_bj_dt: 锚定日期（默认当天），确定计算在哪一天
+
+        Returns:
+            北京时间 datetime（tzinfo=CN_TZ），精确到 < 1 秒
+
+        Raises:
+            ValueError: 迭代超过最大次数未收敛
+        """
+        target_h = _hms_to_float(target_solar_hms)
+
+        # 锚定日期
+        if anchor_bj_dt is None:
+            anchor_bj_dt = datetime.now(CN_TZ)
+        elif anchor_bj_dt.tzinfo is None:
+            anchor_bj_dt = anchor_bj_dt.replace(tzinfo=CN_TZ)
+
+        # 第1步：经度修正（确定值），做粗定位
+        lng_offset = (lng - 120) / 15  # 小时，东经为正
+        approx_h = target_h - lng_offset  # 粗猜的北京小时数
+
+        # 构建初始猜测（用锚定日期）
+        guess = anchor_bj_dt.replace(
+            hour=int(approx_h) % 24,
+            minute=int((approx_h % 1) * 60),
+            second=0,
+            microsecond=0,
+        )
+
+        # 如果粗猜落在锚定日期的前一天，往后推一天
+        # 如果粗猜落在锚定日期的后一天，往前推一天
+        # 通过比较 guess 和 anchor_bj_dt 的日期差来判断
+        # 实际上我们想让 guess 的日期与 anchor_bj_dt 的日期对齐
+        # 但目标真太阳时可能跨午夜（如子时 23:00），所以允许日期偏移
+
+        max_iter = 10
+        for i in range(max_iter):
+            result = self.calculate(lng, lat, guess.strftime("%Y-%m-%d %H:%M:%S"))
+            current_h = _hms_to_float(result["true_solar_time"])
+
+            error = target_h - current_h  # 正数：目标更大 → 需推迟北京时间
+
+            if abs(error) < 0.0003:  # < 1秒
+                break
+
+            guess += timedelta(hours=error)
+
+        else:
+            raise ValueError(
+                f"逆向计算不收敛: lng={lng}, lat={lat}, "
+                f"target={target_solar_hms}, "
+                f"last_error={error:.4f}h"
+            )
+
+        return guess
 
     def calculate(
         self,

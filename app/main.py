@@ -1,23 +1,64 @@
-"""FastAPI 入口：路由定义与异常处理。"""
+"""FastAPI 入口：路由定义、异常处理、飞书机器人 + 定时调度器生命周期管理。"""
 
-from pathlib import Path
+import asyncio
+import logging
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
 
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import JSONResponse
 
-from .config import default_location
+from .config import default_location, get_default_location, get_lark_config
 from .data_loader import loader, AddressNotFoundError
 from .solar_calculator import calculator
 from .schemas import SolarTimeResponse, SolarTimeInput
 
+# 日志
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
+logger = logging.getLogger("main")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """启动时加载行政区划数据到内存"""
+    """启动时：加载数据 + 启动飞书 WS + 启动定时调度器。"""
+    # 加载行政区划数据
     loader.load()
+
+    # 启动飞书机器人 WS（异步后台线程）
+    from .lark_bot import LarkBot, bot as lark_bot_module
+    from .config import get_lark_config
+
+    lark_cfg = get_lark_config()
+    if lark_cfg["app_id"] and lark_cfg["app_secret"]:
+        lark_bot = LarkBot(
+            app_id=lark_cfg["app_id"],
+            app_secret=lark_cfg["app_secret"],
+            remind_user_open_id=lark_cfg.get("remind_user_open_id", ""),
+        )
+        # 将实例设到模块全局，供 scheduler 使用
+        import app.lark_bot as lb
+        lb.bot = lark_bot
+
+        # WS 客户端在独立线程中启动（start() 内部创建自己的事件循环）
+        t = threading.Thread(target=lark_bot.start, daemon=True)
+        t.start()
+        logger.info("飞书 WS 客户端已在后台线程启动")
+    else:
+        logger.warning("未配置飞书 app_id/app_secret，飞书功能不可用")
+
+    # 启动定时辰提醒调度器
+    from .scheduler import scheduler
+    scheduler.start()
+
     yield
+
+    # 关闭：停止调度器
+    scheduler.stop()
+    logger.info("服务已关闭")
 
 
 app = FastAPI(
@@ -74,10 +115,11 @@ async def solar_time(
             detail=f"地理参数必须全部同时传入或全部省略使用默认值，当前缺少参数: {', '.join(missing)}",
         )
 
-    # 省/市/区参数未传时使用配置文件默认值
-    actual_province = province if province else default_location["province"]
-    actual_city = city if city else default_location["city"]
-    actual_district = district if district else default_location["district"]
+    # 省/市/区参数未传时使用配置文件默认值（热读，飞书 SET 修改后即时生效）
+    actual_loc = get_default_location()
+    actual_province = province if province else actual_loc["province"]
+    actual_city = city if city else actual_loc["city"]
+    actual_district = district if district else actual_loc["district"]
 
     # 校验时间格式
     if bj_time is not None:
