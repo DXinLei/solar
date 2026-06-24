@@ -35,7 +35,9 @@ RUN pip install --no-cache-dir \
 # ── 复制项目代码和数据 ──────────────────────────────
 COPY app/ app/
 COPY data/ data/
-COPY AreaCity-JsSpider-StatsGov/ AreaCity-JsSpider-StatsGov/
+
+# 注意：ok_geo.csv（160MB）未纳入 Git，需手动放置到 data/ 目录
+# 或从 release 中下载
 
 # ── 暴露端口 ──────────────────────────────────────────
 EXPOSE 8000

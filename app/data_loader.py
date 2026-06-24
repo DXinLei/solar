@@ -20,12 +20,11 @@ csv_mod.field_size_limit(2_147_483_647)
 # 项目根目录（app/ 的父目录）
 ROOT = Path(__file__).resolve().parent.parent
 
-# AreaCity 数据目录与 CSV 文件路径
-AREACITY = ROOT / "AreaCity-JsSpider-StatsGov"
-CSV_DIR = AREACITY / "src" / "采集到的数据"
-LEVEL3_PATH = CSV_DIR / "ok_data_level3.csv"   # 省市区三级名录
-LEVEL4_PATH = CSV_DIR / "ok_data_level4.csv"   # 省市区乡镇四级名录（预留）
-GEO_PATH = CSV_DIR / "ok_geo.csv"               # 省市区三级中心点坐标+边界
+# CSV 数据目录
+DATA_DIR = ROOT / "data"
+LEVEL3_PATH = DATA_DIR / "ok_data_level3.csv"   # 省市区三级名录
+LEVEL4_PATH = DATA_DIR / "ok_data_level4.csv"   # 省市区乡镇四级名录（预留）
+GEO_PATH = DATA_DIR / "ok_geo.csv"               # 省市区三级中心点坐标+边界
 
 
 class AddressNotFoundError(Exception):
