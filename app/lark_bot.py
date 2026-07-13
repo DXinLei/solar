@@ -21,24 +21,41 @@ from lark_oapi.api.im.v1.model.create_message_request_body import (
     CreateMessageRequestBody,
 )
 
-from .config import get_lark_config, update_default_location
+from .config import get_default_location, get_lark_config, update_default_location
 from .data_loader import loader, AddressNotFoundError
+from .solar_calculator import calculator
 
 logger = logging.getLogger("lark_bot")
 
-# SET 指令正则：支持 "SET 省,市,区" 或 "SET 省，市，区"（中英文逗号）
+# 指令正则：/set 省,市,区（支持中英文逗号）
 _SET_PATTERN = re.compile(
-    r"^SET\s+(\S+?)\s*[,，]\s*(\S+?)\s*[,，]\s*(\S+)$",
+    r"^/set\s+(\S+?)\s*[,，]\s*(\S+?)\s*[,，]\s*(\S+)$",
     re.IGNORECASE,
 )
 
+# 可用指令列表（/help 的数据源）
+_COMMANDS = {
+    "/set": "设置默认位置，格式: /set 省,市,区",
+    "/get": "查询当前真太阳时",
+    "/help": "显示所有可用指令",
+}
+
 
 def _parse_set_command(text: str) -> tuple[str, str, str] | None:
-    """解析 SET 指令，返回 (省, 市, 区) 或 None（格式不匹配）。"""
+    """解析 /set 指令，返回 (省, 市, 区) 或 None（格式不匹配）。"""
     m = _SET_PATTERN.match(text.strip())
     if not m:
         return None
     return m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+
+
+def _extract_command(text: str) -> str | None:
+    """从消息文本中提取命令前缀（如 /set, /get, /help），不区分大小写。"""
+    text = text.strip()
+    for cmd in _COMMANDS:
+        if text.lower().startswith(cmd):
+            return cmd
+    return None
 
 
 def _build_text_content(text: str) -> str:
@@ -132,8 +149,21 @@ class LarkBot:
 
         # 路由指令
         text_stripped = text.strip()
-        if text_stripped.upper().startswith("SET"):
+        cmd = _extract_command(text_stripped)
+
+        if cmd == "/set":
             self._handle_set_command(open_id, text_stripped)
+        elif cmd == "/get":
+            self._handle_get_command(open_id)
+        elif cmd == "/help":
+            self._handle_help_command(open_id)
+        else:
+            # 未知斜杠命令时回复提示
+            if text_stripped.startswith("/"):
+                self._send_text(
+                    open_id,
+                    f"未知指令: {text_stripped.split()[0]}\n输入 /help 查看所有可用指令。",
+                )
 
     @staticmethod
     def _extract_text(content: str) -> str:
@@ -152,7 +182,7 @@ class LarkBot:
         if not parts:
             self._send_text(
                 open_id,
-                "❌ 格式错误，请使用: SET 省,市,区\n示例: SET 四川,成都,双流区",
+                "❌ 格式错误，请使用: /set 省,市,区\n示例: /set 四川,成都,双流区",
             )
             return
 
@@ -166,7 +196,7 @@ class LarkBot:
         except AddressNotFoundError as e:
             self._send_text(
                 open_id,
-                f"❌ 地址匹配失败: {e}\n请检查省市区名称是否正确，例如: SET 四川,成都,双流区",
+                f"❌ 地址匹配失败: {e}\n请检查省市区名称是否正确，例如: /set 四川,成都,双流区",
             )
             return
 
@@ -194,6 +224,80 @@ class LarkBot:
             f"SET 指令完成: {province},{city},{district} → "
             f"{matched_province} {matched_city} {district} (level={level})"
         )
+
+    # ── /get 指令处理 ──────────────────────────────────────────
+
+    def _handle_get_command(self, open_id: str) -> None:
+        """处理 /get 指令：查询当前真太阳时。"""
+        try:
+            # 1. 读取默认位置
+            loc = get_default_location()
+
+            # 2. 匹配坐标
+            lng, lat, level, matched_province, matched_city = loader.lookup(
+                loc["province"], loc["city"], loc["district"]
+            )
+
+            # 3. 计算真太阳时（不传 bj_time = 当前时间）
+            result = calculator.calculate(lng, lat)
+
+            # 4. 构建响应消息
+            level_label = {"province": "省级", "city": "市级", "district": "区级"}.get(
+                level, level
+            )
+            zi_label = f" ({result['zi_shi_type']})" if result.get("zi_shi_type") else ""
+
+            lines = [
+                f"📍 {matched_province} {matched_city} {loc['district']}",
+                f"📌 匹配精度: {level_label}",
+                f"🌐 经纬度: {lng:.5f}, {lat:.5f}",
+                "",
+                f"🌞 真太阳时: {result['true_solar_time']}",
+                f"🕐 时辰: {result['solar_shichen']}{zi_label}",
+                f"📅 日期: {result['final_pan_date']}",
+                "",
+                f"⏰ 标准北京时间: {result['standard_bj_time'].split()[1]}",
+            ]
+            if result["is_daylight_saving"]:
+                lines.append("💡 当前时段曾实行夏令时，已自动修正")
+
+            self._send_text(open_id, "\n".join(lines))
+
+            logger.info(
+                f"/get 指令完成: {matched_province} {matched_city} {loc['district']} | "
+                f"真太阳时={result['true_solar_time']} | 时辰={result['solar_shichen']}"
+            )
+
+        except AddressNotFoundError as e:
+            self._send_text(
+                open_id,
+                f"❌ 地址匹配失败: {e}\n"
+                f"请先使用 /set 命令设置正确的默认位置。",
+            )
+        except Exception as e:
+            logger.exception(f"/get 指令异常: {e}")
+            self._send_text(
+                open_id,
+                "❌ 查询失败，请稍后重试。",
+            )
+
+    # ── /help 指令处理 ─────────────────────────────────────────
+
+    def _handle_help_command(self, open_id: str) -> None:
+        """处理 /help 指令：列出所有可用指令。"""
+        lines = [
+            "🤖 真太阳时机器人 — 可用指令",
+            "",
+        ]
+        for cmd, desc in _COMMANDS.items():
+            lines.append(f"  {cmd}")
+            lines.append(f"    {desc}")
+            lines.append("")
+
+        lines.append("💡 提示：指令不区分大小写，如 /SET 等同于 /set。")
+        lines.append("🌐 坐标数据基于高德地图 GCJ-02 坐标系。")
+
+        self._send_text(open_id, "\n".join(lines))
 
     # ── 消息发送 ──────────────────────────────────────────────
 
