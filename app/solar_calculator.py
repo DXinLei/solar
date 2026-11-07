@@ -4,6 +4,7 @@
 禁止重复手动叠加均时差公式。
 """
 
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -76,20 +77,46 @@ def _correct_daylight_saving(bj_dt: datetime) -> tuple[datetime, bool]:
     return bj_dt, False
 
 
-def _true_solar_time(
+# 十六罗盘方位角基准（0°为真北，顺时针）
+_COMPASS_POINTS_16 = [
+    ("正北", 0.0),
+    ("东北偏北", 22.5),
+    ("东北", 45.0),
+    ("东北偏东", 67.5),
+    ("正东", 90.0),
+    ("东南偏东", 112.5),
+    ("东南", 135.0),
+    ("东南偏南", 157.5),
+    ("正南", 180.0),
+    ("西南偏南", 202.5),
+    ("西南", 225.0),
+    ("西南偏西", 247.5),
+    ("正西", 270.0),
+    ("西北偏西", 292.5),
+    ("西北", 315.0),
+    ("西北偏北", 337.5),
+]
+
+
+def _degree_to_direction(deg: float) -> str:
+    """将 [0, 360) 角度映射到十六方位文字描述。"""
+    idx = int(((deg + 11.25) % 360) / 22.5)
+    return _COMPASS_POINTS_16[idx][0]
+
+
+def _calculate_solar_all(
     lng: float, lat: float, utc_dt: datetime
-) -> tuple[float, datetime]:
-    """基于 ephem 计算真太阳时。
+) -> tuple[float, dict]:
+    """基于 ephem 计算真太阳时以及太阳地平视位置（方位角、高度角）。
 
     Args:
         lng: 当地经度
         lat: 当地纬度
-        utc_dt: UTC时间（ephem只接受UTC时间）
+        utc_dt: UTC时间
 
     Returns:
-        (真太阳时的小时数[0.0-24.0), 对应的UTC时间)
+        (真太阳时小时数[0.0-24.0), 太阳空间方位信息字典)
     """
-    # 创建观察者
     obs = ephem.Observer()
     obs.lon = str(lng)
     obs.lat = str(lat)
@@ -99,21 +126,51 @@ def _true_solar_time(
     # 通过 ephem.Sun() 计算太阳视位置，天然包含均时差修正
     sun = ephem.Sun(obs)
 
-    # 计算太阳时角：从观测者经度、太阳赤经和当前恒星时推导
-    # 真太阳时 = (当地恒星时 - 太阳赤经 + 24) % 24
-    # 其中当地恒星时 = 格林尼治恒星时 + 经度/15
-    # ephem 的 sidereal_time() 返回的是观测者所在地的视恒星时（弧度）
-    sidereal = float(obs.sidereal_time())  # 弧度
-    sun_ra = float(sun.ra)  # 弧度
-
-    # 太阳时角（弧度）
+    # 1. 计算真太阳时角
+    sidereal = float(obs.sidereal_time())  # 视恒星时（弧度）
+    sun_ra = float(sun.ra)  # 太阳赤经（弧度）
     hour_angle = (sidereal - sun_ra) % (2 * ephem.pi)
-
-    # 转换为真太阳时小时数：时角 + 12小时 = 真太阳时
-    # 当太阳在子午线上时，时角=0，真太阳时=12:00
     solar_hours = (hour_angle * 12 / ephem.pi + 12) % 24
 
-    return solar_hours, utc_dt
+    # 2. 地平坐标计算（方位角 Azimuth 与 高度角 Altitude）
+    azimuth_deg = round(math.degrees(float(sun.az)), 2)
+    altitude_deg = round(math.degrees(float(sun.alt)), 2)
+    shadow_azimuth_deg = round((azimuth_deg + 180.0) % 360.0, 2)
+    is_visible = altitude_deg > 0
+    direction = _degree_to_direction(azimuth_deg)
+    shadow_direction = _degree_to_direction(shadow_azimuth_deg)
+
+    if is_visible:
+        guide = (
+            f"当前太阳位于【{direction}】({azimuth_deg}°)，仰角 {altitude_deg}°。"
+            f"面向太阳时，真北位于左侧偏后 {round(azimuth_deg, 1)}°；"
+            f"垂直物体日影严格指向【{shadow_direction}】({shadow_azimuth_deg}°)。"
+        )
+    else:
+        guide = (
+            f"当前太阳位于地平线以下（仰角 {altitude_deg}°，夜间不可见）。"
+            f"当前理论天体方位为【{direction}】({azimuth_deg}°)。"
+        )
+
+    solar_pos = {
+        "azimuth": azimuth_deg,
+        "altitude": altitude_deg,
+        "shadow_azimuth": shadow_azimuth_deg,
+        "direction": direction,
+        "shadow_direction": shadow_direction,
+        "is_visible": is_visible,
+        "orientation_guide": guide,
+    }
+
+    return solar_hours, solar_pos
+
+
+def _true_solar_time(
+    lng: float, lat: float, utc_dt: datetime
+) -> tuple[float, datetime]:
+    """向后兼容：计算真太阳时。"""
+    hours, _ = _calculate_solar_all(lng, lat, utc_dt)
+    return hours, utc_dt
 
 
 def _hours_to_hms(hours: float) -> str:
@@ -262,8 +319,8 @@ class SolarCalculator:
         # 步骤2：北京时间转UTC（ephem只接受UTC时间）
         utc_dt = standard_bj_dt.astimezone(UTC)
 
-        # 步骤3：计算真太阳时
-        solar_hours, _ = _true_solar_time(lng, lat, utc_dt)
+        # 步骤3：计算真太阳时与太阳地平视位置（方位角/高度角/影子朝向）
+        solar_hours, solar_pos = _calculate_solar_all(lng, lat, utc_dt)
 
         # 步骤4：确定时辰和子时类型
         shichen, zi_type, date_offset = _get_shichen(solar_hours)
@@ -283,6 +340,7 @@ class SolarCalculator:
             "solar_shichen": shichen,
             "zi_shi_type": zi_type,
             "final_pan_date": pan_date,
+            "solar_position": solar_pos,
         }
 
 

@@ -1,9 +1,10 @@
 """应用配置：从 config.json 加载可配置项。
 
-- get_default_location()  热读地理位置（带短缓存，飞书修改后即时生效）
-- update_default_location()  原子写入地理位置（飞书 SET 指令）
-- get_lark_config()        读取飞书应用凭证
-- get_reminder_config()    读取提醒规则
+- get_default_location()     热读地理位置（带短缓存，修改后即时生效）
+- update_default_location()  原子写入地理位置
+- get_lark_config()          读取飞书应用凭据及启用开关
+- get_webhook_config()       读取 Webhook 推送配置
+- get_reminder_config()      读取提醒规则
 """
 
 import json
@@ -55,7 +56,7 @@ def _load_full_config() -> dict[str, Any]:
 
 
 def get_default_location() -> dict[str, Any]:
-    """读取当前生效的默认地理位置（带短缓存，飞书 SET 修改后最多 10s 生效）。"""
+    """读取当前生效的默认地理位置（带短缓存，修改后最多 10s 生效，主动写后即时生效）。"""
     global _default_location_cache, _last_read_ts
     now = time.time()
     if _default_location_cache is None or (now - _last_read_ts) > _CACHE_TTL:
@@ -90,13 +91,30 @@ def update_default_location(province: str, city: str, district: str) -> None:
 
 
 def get_lark_config() -> dict[str, Any]:
-    """读取飞书应用配置（app_id, app_secret 等）。"""
+    """读取飞书应用配置（enabled, app_id, app_secret 等）。"""
     data = _load_full_config()
     lark = data.get("lark", {})
+    enabled_val = lark.get("enabled")
+    if enabled_val is None:
+        enabled = bool(lark.get("app_id") and lark.get("app_secret"))
+    else:
+        enabled = bool(enabled_val)
+
     return {
+        "enabled": enabled,
         "app_id": lark.get("app_id", ""),
         "app_secret": lark.get("app_secret", ""),
         "remind_user_open_id": lark.get("remind_user_open_id", ""),
+    }
+
+
+def get_webhook_config() -> dict[str, Any]:
+    """读取通用 Webhook 推送配置。"""
+    data = _load_full_config()
+    webhook = data.get("webhook", {})
+    return {
+        "enabled": webhook.get("enabled", False),
+        "url": webhook.get("url", ""),
     }
 
 
@@ -111,6 +129,5 @@ def get_reminder_config() -> dict[str, Any]:
     }
 
 
-# 向后兼容：服务启动时的初始值（用于 main.py 中的 /api/solar-time 接口）
-# 注意：飞书 SET 修改后，此变量不会更新。接口需改用 get_default_location()
+# 向后兼容：服务启动时的初始值
 default_location = _load_config()

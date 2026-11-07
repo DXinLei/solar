@@ -49,6 +49,14 @@ class HealthGuide:
         """获取所有已加载的时辰名称。"""
         return list(self._data.keys())
 
+    def get_guide(self, shichen: str) -> Optional[dict]:
+        """获取指定时辰的养生数据字典。"""
+        return self._data.get(shichen)
+
+    def get_all_guides(self) -> dict:
+        """获取全部时辰的养生数据字典。"""
+        return dict(self._data)
+
     def get_next_shichen(self, current: str) -> Optional[str]:
         """获取下一个时辰名称。"""
         idx = _SHICHEN_ORDER.index(current) if current in _SHICHEN_ORDER else -1

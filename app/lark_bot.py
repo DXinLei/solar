@@ -21,8 +21,9 @@ from lark_oapi.api.im.v1.model.create_message_request_body import (
     CreateMessageRequestBody,
 )
 
-from .config import get_default_location, get_lark_config, update_default_location
+from .config import get_default_location, get_lark_config
 from .data_loader import loader, AddressNotFoundError
+from .location_service import get_current_location, set_location
 from .solar_calculator import calculator
 
 logger = logging.getLogger("lark_bot")
@@ -177,7 +178,7 @@ class LarkBot:
     # ── SET 指令处理 ──────────────────────────────────────────
 
     def _handle_set_command(self, open_id: str, text: str) -> None:
-        """处理 SET 省,市,区 指令。"""
+        """处理 /set 省,市,区 指令。"""
         parts = _parse_set_command(text)
         if not parts:
             self._send_text(
@@ -188,41 +189,35 @@ class LarkBot:
 
         province, city, district = parts
 
-        # 复用 data_loader.lookup() 校验地址合法性
+        # 调用统一位置服务（包含地址校验、原子落盘、调度器重新规划）
         try:
-            lng, lat, level, matched_province, matched_city = loader.lookup(
-                province, city, district
-            )
+            info = set_location(province, city, district)
         except AddressNotFoundError as e:
             self._send_text(
                 open_id,
                 f"❌ 地址匹配失败: {e}\n请检查省市区名称是否正确，例如: /set 四川,成都,双流区",
             )
             return
-
-        # 原子写入 config.json
-        try:
-            update_default_location(matched_province, matched_city, district)
-        except OSError as e:
-            logger.error(f"写入 config.json 失败: {e}")
-            self._send_text(open_id, f"❌ 配置文件写入失败: {e}")
+        except Exception as e:
+            logger.error(f"更新位置失败: {e}")
+            self._send_text(open_id, f"❌ 配置文件更新失败: {e}")
             return
 
         # 回复成功
         level_label = {"province": "省级", "city": "市级", "district": "区级"}.get(
-            level, level
+            info["level"], info["level"]
         )
         self._send_text(
             open_id,
-            f"✅ 默认位置已更新\n"
-            f"📍 {matched_province} {matched_city} {district}\n"
+            f"✅ 默认位置已更新（调度任务已同步更新）\n"
+            f"📍 {info['province']} {info['city']} {info['district']}\n"
             f"📌 匹配精度: {level_label}\n"
-            f"🌐 经纬度: {lng:.5f}, {lat:.5f}",
+            f"🌐 经纬度: {info['longitude']:.5f}, {info['latitude']:.5f}",
         )
 
         logger.info(
             f"SET 指令完成: {province},{city},{district} → "
-            f"{matched_province} {matched_city} {district} (level={level})"
+            f"{info['province']} {info['city']} {info['district']} (level={info['level']})"
         )
 
     # ── /get 指令处理 ──────────────────────────────────────────
@@ -230,27 +225,22 @@ class LarkBot:
     def _handle_get_command(self, open_id: str) -> None:
         """处理 /get 指令：查询当前真太阳时。"""
         try:
-            # 1. 读取默认位置
-            loc = get_default_location()
+            # 1. 获取当前默认位置及其坐标
+            loc_info = get_current_location()
 
-            # 2. 匹配坐标
-            lng, lat, level, matched_province, matched_city = loader.lookup(
-                loc["province"], loc["city"], loc["district"]
-            )
+            # 2. 计算真太阳时（不传 bj_time = 当前时间）
+            result = calculator.calculate(loc_info["longitude"], loc_info["latitude"])
 
-            # 3. 计算真太阳时（不传 bj_time = 当前时间）
-            result = calculator.calculate(lng, lat)
-
-            # 4. 构建响应消息
+            # 3. 构建响应消息
             level_label = {"province": "省级", "city": "市级", "district": "区级"}.get(
-                level, level
+                loc_info["level"], loc_info["level"]
             )
             zi_label = f" ({result['zi_shi_type']})" if result.get("zi_shi_type") else ""
 
             lines = [
-                f"📍 {matched_province} {matched_city} {loc['district']}",
+                f"📍 {loc_info['province']} {loc_info['city']} {loc_info['district']}",
                 f"📌 匹配精度: {level_label}",
-                f"🌐 经纬度: {lng:.5f}, {lat:.5f}",
+                f"🌐 经纬度: {loc_info['longitude']:.5f}, {loc_info['latitude']:.5f}",
                 "",
                 f"🌞 真太阳时: {result['true_solar_time']}",
                 f"🕐 时辰: {result['solar_shichen']}{zi_label}",
@@ -264,7 +254,7 @@ class LarkBot:
             self._send_text(open_id, "\n".join(lines))
 
             logger.info(
-                f"/get 指令完成: {matched_province} {matched_city} {loc['district']} | "
+                f"/get 指令完成: {loc_info['province']} {loc_info['city']} {loc_info['district']} | "
                 f"真太阳时={result['true_solar_time']} | 时辰={result['solar_shichen']}"
             )
 

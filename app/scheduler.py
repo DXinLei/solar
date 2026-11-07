@@ -108,9 +108,28 @@ class ShichenScheduler:
 
     def stop(self) -> None:
         """停止调度器。"""
-        if self._scheduler:
+        if self._scheduler and self._scheduler.running:
             self._scheduler.shutdown(wait=False)
             logger.info("时辰提醒调度器已停止")
+
+    def reschedule(self) -> None:
+        """重新计算并注册所有触发任务（在位置更新时调用）。"""
+        if not self._scheduler or not self._scheduler.running:
+            return
+        self._scheduler.remove_all_jobs()
+        self._schedule_all_upcoming()
+        jobs = self._scheduler.get_jobs()
+        logger.info(f"时辰提醒调度器已重新调度，当前注册 {len(jobs)} 个触发任务")
+
+    def is_running(self) -> bool:
+        """调度器是否正在运行。"""
+        return bool(self._scheduler and self._scheduler.running)
+
+    def get_job_count(self) -> int:
+        """获取当前已注册的任务数量。"""
+        if self._scheduler and self._scheduler.running:
+            return len(self._scheduler.get_jobs())
+        return 0
 
     # ── 调度逻辑 ──────────────────────────────────────────────
 
@@ -281,20 +300,9 @@ class ShichenScheduler:
         city: str,
         district: str,
     ) -> None:
-        """发送养生提醒消息到飞书（基于 health_guide.json 内容）。"""
-        from .lark_bot import bot
-        from .config import get_lark_config
+        """发送养生提醒消息（统一由 notification_manager 分发）。"""
+        from .notifier import notification_manager
         from .health_guide import health_guide
-
-        if bot is None:
-            logger.warning("飞书机器人未初始化，跳过提醒")
-            return
-
-        lark_cfg = get_lark_config()
-        open_id = lark_cfg.get("remind_user_open_id", "")
-        if not open_id:
-            logger.warning("未配置 remind_user_open_id，跳过提醒")
-            return
 
         # 重新计算当前真太阳时（此时正是触发点）
         result = calculator.calculate(lng, lat)
@@ -323,9 +331,26 @@ class ShichenScheduler:
                 f"🌞 {result['true_solar_time']} | 📅 {result['final_pan_date']}"
             )
 
-        bot.send_reminder(open_id, text)
+        title = f"子午流注·{shichen}"
+        data = {
+            "shichen": shichen,
+            "phase": phase,
+            "true_solar_time": result["true_solar_time"],
+            "standard_bj_time": result["standard_bj_time"],
+            "final_pan_date": result["final_pan_date"],
+            "zi_type": result.get("zi_shi_type"),
+            "location": {
+                "province": province,
+                "city": city,
+                "district": district,
+                "longitude": lng,
+                "latitude": lat,
+            },
+        }
+
+        notification_manager.send(title=title, text=text, data=data)
         logger.info(
-            f"已发送养生提醒: {shichen} {phase} | "
+            f"已触发养生提醒: {shichen} {phase} | "
             f"真太阳时={result['true_solar_time']}"
         )
 

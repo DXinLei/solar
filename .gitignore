@@ -50,3 +50,6 @@ Desktop.ini
 .idea/
 *.sublime-project
 *.sublime-workspace
+
+
+apps/
