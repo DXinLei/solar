@@ -15,6 +15,8 @@ services:
     volumes:
       # config.json 挂载出来，飞书 SET 修改持久化
       - ./config.json:/solar/config.json
+      # 代码目录挂载，便于 git pull 后直接生效无需强制重新打包镜像
+      - ./app:/solar/app
     environment:
       - TZ=Asia/Shanghai
     healthcheck:

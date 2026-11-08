@@ -10,6 +10,7 @@ from typing import Optional
 from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .version import APP_VERSION, PROCESS_START_TIME, get_git_commit
 from .config import default_location, get_default_location, get_lark_config, get_webhook_config
 from .data_loader import loader, AddressNotFoundError
 from .location_service import get_current_location, set_location
@@ -88,7 +89,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="倪派紫微斗数真太阳时 API",
     description="基于 ephem 天文计算的真太阳时与子午流注养生服务，支持独立 REST API 与可选飞书通知集成",
-    version="1.1.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -432,6 +433,19 @@ async def get_system_status() -> SystemStatusResponse:
         scheduler_running=scheduler.is_running(),
         scheduled_jobs_count=scheduler.get_job_count(),
     )
+
+
+@app.get("/version", tags=["系统状态"])
+@app.get("/api/version", tags=["系统状态"])
+async def get_version() -> dict:
+    """获取当前服务部署版本、Git Commit 与进程启动时间，便于确认线上版本更新状态。"""
+    return {
+        "version": APP_VERSION,
+        "commit": get_git_commit(),
+        "started_at": PROCESS_START_TIME,
+        "service": "solar-time",
+        "status": "ok",
+    }
 
 
 # ── 客户端实时调试日志接收接口 ──────────────────────────────────
