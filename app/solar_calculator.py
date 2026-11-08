@@ -11,8 +11,8 @@ from typing import Optional
 import ephem
 from zoneinfo import ZoneInfo
 
-# 中国标准时区
-CN_TZ = ZoneInfo("Asia/Shanghai")
+# 中国标准时区（固定 UTC+8，历史夏令时由 _correct_daylight_saving 显式修正）
+CN_TZ = timezone(timedelta(hours=8))
 UTC = timezone.utc
 
 # 十二时辰定义（按真太阳时）
@@ -187,32 +187,24 @@ def _hms_to_float(hms: str) -> float:
     return int(parts[0]) + int(parts[1]) / 60 + int(parts[2]) / 3600
 
 
-def _get_shichen(solar_hours: float) -> tuple[str, Optional[str], str]:
-    """根据真太阳时确定十二时辰、子时类型和排盘日期偏移。
+def _get_shichen(solar_hours: float) -> tuple[str, Optional[str]]:
+    """根据真太阳时确定十二时辰和子时类型。
 
     倪派规则：
-    - 真太阳时 23:00 ~ 00:00：晚子时，排盘日期沿用前一天
-    - 真太阳时 00:00 ~ 01:00：早子时，排盘日期按当天
+    - 真太阳时 23:00 ~ 24:00 (23:00:00 ~ 23:59:59)：晚子时
+    - 真太阳时 00:00 ~ 01:00 (00:00:00 ~ 00:59:59)：早子时
+    - 其余时辰：zi_shi_type 为 None
 
     Returns:
-        (时辰名称, 子时类型或None, 日期偏移量"today"或"yesterday")
+        (时辰名称, 子时类型或None)
     """
-    # 将 0-24 映射到时辰索引
-    # 子时: [23,24) 和 [0,1)  → 索引0
-    # 丑时: [1,3)            → 索引1
-    # 寅时: [3,5)            → 索引2
-    # ...
-    # 亥时: [21,23)          → 索引11
-
     if 23 <= solar_hours < 24:
-        # 晚子时：日期沿用前一天
-        return "子时", "晚子时", "yesterday"
+        return "子时", "晚子时"
     elif 0 <= solar_hours < 1:
-        # 早子时：日期按当天
-        return "子时", "早子时", "today"
+        return "子时", "早子时"
     else:
         idx = int((solar_hours + 1) / 2)  # 丑时从1开始
-        return SHICHEN_NAMES[idx], None, "today"
+        return SHICHEN_NAMES[idx], None
 
 
 class SolarCalculator:
@@ -323,20 +315,23 @@ class SolarCalculator:
         solar_hours, solar_pos = _calculate_solar_all(lng, lat, utc_dt)
 
         # 步骤4：确定时辰和子时类型
-        shichen, zi_type, date_offset = _get_shichen(solar_hours)
+        shichen, zi_type = _get_shichen(solar_hours)
 
-        # 步骤5：计算排盘用最终日期（处理晚子时日期偏移）
-        if date_offset == "yesterday":
-            pan_date = (standard_bj_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-        else:
-            pan_date = standard_bj_dt.strftime("%Y-%m-%d")
+        # 步骤5：计算排盘用最终日期（真太阳时刻所在的那一天）
+        true_solar_str = _hours_to_hms(solar_hours)
+        th, tm, ts = map(int, true_solar_str.split(":"))
+        solar_sec = th * 3600 + tm * 60 + ts
+        bj_sec = standard_bj_dt.hour * 3600 + standard_bj_dt.minute * 60 + standard_bj_dt.second
+        delta_sec = (solar_sec - bj_sec + 12 * 3600) % (24 * 3600) - 12 * 3600
+        solar_dt = standard_bj_dt + timedelta(seconds=delta_sec)
+        pan_date = solar_dt.strftime("%Y-%m-%d")
 
         return {
             "is_daylight_saving": is_dst,
             "standard_bj_time": standard_bj_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "longitude": lng,
             "latitude": lat,
-            "true_solar_time": _hours_to_hms(solar_hours),
+            "true_solar_time": true_solar_str,
             "solar_shichen": shichen,
             "zi_shi_type": zi_type,
             "final_pan_date": pan_date,
